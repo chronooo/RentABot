@@ -1,22 +1,16 @@
-from functions import *
+import asyncio
 import csv
 import discord
 import os
 from dotenv import load_dotenv
+from io import StringIO
+from functions import *
 
 load_dotenv("locals.env")
 TOKEN = os.getenv('DISCORD_TOKEN')
-bot = discord.Bot(intents=discord.Intents.all())
+bot = discord.Bot(command_prefix="1", intents=discord.Intents.all())
 
-global culvert_wait
-culvert_wait = 0
 
-def update_wait():
-    global culvert_wait
-    if culvert_wait == 0:
-        culvert_wait = 1
-    else:
-        culvert_wait = 0
 @bot.event
 async def on_ready():
     print(f"{bot.user} is ready and online!")
@@ -42,24 +36,7 @@ async def get_user_id(ctx, user: discord.User):
     await ctx.respond(f"User {user.name}'s ID is {user.id}")
 
 
-@bot.slash_command(name="harass", description="FRIENDLY REMINDER FOR CULVERT")
-async def send_message(ctx):
-    user_list = [128442423323000832]
-    should_send_message = True
-    if should_send_message:
-        for user_id in user_list:
-            user = bot.get_user(user_id)
-            if user:
-                try:
-                    await user.send("Fuck you do culvert")
-                except discord.Forbidden:
-                    await ctx.send(f"Couldn't send a message to {user.name}.")
-            else:
-                await ctx.send(f"User with ID {user_id} not found.")
-    else:
-        await ctx.send("The condition is not met, so no messages were sent.")
-
-
+# Save this function for updating list with new members
 @bot.slash_command(name="export-names", description="doxx everyone")
 async def export_members(ctx):
     # Fetch the specific role by name
@@ -88,52 +65,51 @@ async def export_members(ctx):
         ctx.respond("You cant use this command", ephemeral=True)
 
 
-@bot.slash_command()
-async def test_matcha(ctx):
-    if is_junior(ctx):
-        await ctx.send("You are in fact a junior")
-    else:
-        await ctx.send("agony awaits")
-
-
-#
-# @bot.slash_command(name="culvert_check", description="Return a list of who hasn't done culvert")
-# async def process_file(ctx, uploaded_file: discord.File):
-#     # Check if a file is attached
-#     if uploaded_file:
-#         # Get information about the uploaded file
-#         file_info = f"File Name: {uploaded_file.filename}\nFile Size: {uploaded_file.filesize} bytes"
-#         await ctx.send(f"Received a file!\n{file_info}")
-#     else:
-#         await ctx.send("No file attached. Please attach a file for processing.")
-
-
 @bot.event
-async def on_message(message):
-    global culvert_wait
-    # Check if the message sender is not the bot itself to avoid an infinite loop
+async def culvert_notify(message):
     if message.author == bot.user:
-        return
-
-    if is_junior(message) and message.content == "!culvert notify":
-        await message.channel.send("Alrighty waiting for the csv file")
-        update_wait()
-
-    if culvert_wait == 1 and len(message.attachments) == 1:
-        if message.attachments and is_junior(message):
-            for attachment in message.attachments:
-                await message.channel.send(f"File Name: {attachment.filename}")
-                # Get the current working directory
-                current_directory = os.getcwd()
-                # Form the file path for saving in the current directory
-                file_path = os.path.join(current_directory, attachment.filename)
-                print(file_path)
-                await attachment.save(file_path)
-                await message.channel.send("Saved file")
-
-        else:
-            await message.channel.send("No files in the message, no longer waiting")
-            culvert_wait = 0
+        return  # Ignore messages from the bot itself
+    # who asked (Literally)
+    user_initiated = None
+    if message.content.lower() == "!culvertnotify" and is_junior(message):
+        await message.channel.send("Please attach a CSV file.")
+        # Store the user who initiated the command
+        user_initiated = message.author
+        try:
+            message = await bot.wait_for('message', timeout=10)
+            # Check if the user who sent the file is the same as the one who initiated the command
+            if message.author == user_initiated:
+                attachment = message.attachments[0]
+                # Access the filename
+                filename = attachment.filename
+                if filename.endswith(".csv"):
+                    await message.channel.send(f"Received a CSV file with the name: {filename}")
+                    # Download and process the CSV file
+                    csv_data = await attachment.read()
+                    csv_text = csv_data.decode('utf-8')
+                    # Process the CSV content
+                    csv_file = StringIO(csv_text)
+                    csv_reader = csv.reader(csv_file)
+                    next(csv_reader)
+                    for row in csv_reader:
+                        if len(row) >= 11:  # Check if there are at least 11 columns
+                            user_id = int(row[1])  # UserID is in the 2nd column (0-based index)
+                            done_culvert = row[10]  # Done Culvert is in the 11th column (0-based index)
+                            IGN = row[3]
+                            if user_id:  # if user_id not blank
+                                user = bot.get_user(user_id)
+                                if done_culvert == "FALSE":
+                                    await user.send(
+                                        f"Hi just a friendly reminder to do your culvert this week on {IGN}.")
+                                    print("Message sent")
+                    # Now you have the "UserID" and "Done Culvert" values in user_ids and done_culverts
+                    await message.channel.send("CSV data received and processed.")
+                else:
+                    await message.channel.send("Attach a CSV file.")
+            else:
+                await message.channel.send("You must be the user who initiated the command to submit the CSV file.")
+        except asyncio.TimeoutError:
+            await message.channel.send("Took too long or didn't follow instructions.")
 
 
 bot.run(TOKEN)
